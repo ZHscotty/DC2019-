@@ -10,11 +10,10 @@ import matplotlib.pyplot as plt
 
 
 class InputExample:
-    def __init__(self, id, input, seqlen, label=None):
+    def __init__(self, id, input, label=None):
         self.id = id
         self.input = input
         self.label = label
-        self.seqlen = seqlen
 
 
 class Data:
@@ -89,7 +88,7 @@ class Data:
             test_example = np.array(test_example)
             print('processing {}....test_example shape:{}'.format(index, test_example.shape))
             index += 1
-            testExample = InputExample(id=x, input=test_example, seqlen=seqlen, label=None)
+            testExample = InputExample(id=x, input=test_example, label=None)
             test_examples.append(testExample)
         return test_examples
 
