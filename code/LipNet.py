@@ -83,7 +83,6 @@ class Model:
         return score, acc, loss, train_step, t
 
     def train(self, train_examples, dev_examples):
-        self.mode = 'train'
         saver = tf.train.Saver()
         with tf.Session() as sess:
             sess.run(tf.global_variables_initializer())
@@ -103,7 +102,10 @@ class Model:
                 loss_total = 0
                 acc_dev_total = 0
                 loss_dev_total = 0
-                num = len(train_examples) // config.BATCH_SIZE + 1
+                if num%config.BATCH_SIZE == 0:
+                    num = len(train_examples) // config.BATCH_SIZE
+                else:
+                    num = len(train_examples) // config.BATCH_SIZE + 1
                 for i in range(num):
                     end = begin + config.BATCH_SIZE
                     if end > len(train_examples):
@@ -111,14 +113,11 @@ class Model:
                     train_batch = train_examples[begin:end]
                     input_batch = [x.input for x in train_batch]
                     label_batch = [x.label for x in train_batch]
-                    seqlen_batch = [x.seqlen for x in train_batch]
                     begin = end
                     _, acc_t, loss_t, t = sess.run([self.train_step, self.acc, self.loss, self.t],
-                                                               {self.input: input_batch,
-                                                                self.label: label_batch
-                                                                })
-                    # print(t)
-                    # print(t.shape)
+                                                   {self.input: input_batch, self.label: label_batch,
+                                                    self.is_training: True})
+
                     acc_total += acc_t
                     loss_total += loss_t
                     print('step:{}  [{}/{}]  --acc:{}, --loss:{}'.format(i, end, len(train_examples), round(acc_t, 2),
@@ -142,7 +141,8 @@ class Model:
                     input_dev = [x.input for x in dev_batch]
                     label_dev = [x.label for x in dev_batch]
                     begin = end
-                    acc_d, loss_d = sess.run([self.acc, self.loss], {self.input: input_dev, self.label: label_dev})
+                    acc_d, loss_d = sess.run([self.acc, self.loss], {self.input: input_dev, self.label: label_dev,
+                                                                     self.is_training: False})
                     acc_dev_total += acc_d
                     loss_dev_total += loss_d
 
@@ -150,7 +150,6 @@ class Model:
                 loss_dd = loss_dev_total/num
                 acc_dev.append(acc_dd)
                 loss_dev.append(loss_dd)
-
                 print('Epoch{}----acc:{},loss:{},val_acc:{},val_loss:{}'.format(step, acc_t, loss_t, round(acc_dd, 2),
                                                                                 round(loss_dd, 4)))
                 if loss_dd > loss_stop:
@@ -179,7 +178,7 @@ class Model:
         plt.ylabel('accuracy')
         plt.xlabel('epoch')
         plt.legend(['train', 'test'], loc='upper left')
-        plt.savefig(self.RESULT_ACC_PATH)
+        plt.savefig(os.path.join(self.PIC_DIC, 'acc.png'))
         plt.close()
 
         plt.plot(loss_train)
@@ -187,19 +186,31 @@ class Model:
         plt.ylabel('loss')
         plt.xlabel('epoch')
         plt.legend(['train', 'test'], loc='upper left')
-        plt.savefig(self.RESULT_LOSS_PATH)
+        plt.savefig(self.PIC_DIC, 'loss.png')
         plt.close()
 
     def predict(self, test_examples):
-        self.mode = 'test'
         saver = tf.train.Saver()
         with tf.Session() as sess:
             ckpt = tf.train.latest_checkpoint(self.MODEL_DIC)  # 找到存储变量值的位置
             saver.restore(sess, ckpt)
-            test_batch = [x.input for x in test_examples]
-            seqlen_batch = [x.seqlen for x in test_examples]
-            predict = sess.run(self.score, {self.input: test_batch})
-            return predict
+            begin = 0
+            if len(test_examples)%500 == 0:
+                num = len(test_examples)//500
+            else:
+                num = len(test_examples)//500+1
+            pre_list = []
+            for index in range(num):
+                end = begin + 500
+                if end > len(test_examples):
+                    end = len(test_examples)
+                test_batch = test_examples[begin:end]
+                input_test = [x.input for x in test_batch]
+                predict = sess.run(self.score, {self.input: input_test, self.is_training:False})
+                pre_list.append(predict)
+                begin = end
+            result = np.concatenate(pre_list, axis=0)
+            return result
 
 
 if __name__ == '__main__':
