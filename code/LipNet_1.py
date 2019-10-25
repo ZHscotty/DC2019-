@@ -9,21 +9,6 @@ from PIL import Image
 from sklearn.model_selection import train_test_split
 import pickle
 
-np.set_printoptions(threshold=np.inf)
-
-
-# PIC_NUM = 24
-# WIDTH = 64
-# HEIGHT = 64
-# HIDDEN_SIZE1 = 512
-# HIDDEN_SIZE2 = 512
-# DROP = 0.5
-# TYPE_NUM = 313
-# LR = 0.0001
-# EPOCH = 200
-# BATCH_SIZE = 32
-# EARLY_STEP = 3
-
 
 class Model:
     def __init__(self):
@@ -111,95 +96,34 @@ class Model:
                 loss_total = 0
                 acc_dev_total = 0
                 loss_dev_total = 0
-
-                file_list = os.listdir(train_path)
-                train_file, test_file = train_test_split(file_list, test_size=0.2)
-                if len(train_file) % config.BATCH_SIZE == 0:
-                    num = len(train_file) // config.BATCH_SIZE
-                else:
-                    num = len(train_file) // config.BATCH_SIZE + 1
-                begin = 0
-                for i in range(num):
-                    end = begin + config.BATCH_SIZE
-                    if end > len(train_file):
-                        end = len(train_file)
-                    data_list = train_file[begin:end]
-                    begin = end
-                    label = []
-                    input = []
-                    for d in data_list:
-                        plabel = self.id2label[d]
-                        plabel = self.label2lid[plabel]
-                        plabel = to_categorical(plabel, 313)
-                        pinput = []
-                        file_path = os.path.join(train_path, d)
-                        for ff in os.listdir(file_path):
-                            pic_path = os.path.join(file_path, ff)
-                            im = Image.open(pic_path)
-                            im = im.convert("L")
-                            im = im.resize((config.WIDTH, config.HEIGHT))
-                            matrix = np.asarray(im)
-                            matrix = matrix / 255
-                            pinput.append(matrix)
-                        while len(pinput) < config.PIC_NUM:
-                            pinput.append(np.zeros(shape=(config.WIDTH, config.HEIGHT)))
-                        pinput = np.array(pinput)
-                        label.append(plabel)
-                        input.append(pinput)
-                    label = np.array(label)
-                    input = np.array(input)
+                train_step = 0
+                train_num = 0
+                train_list, dev_list = train_test_split(os.listdir(train_path), test_size=0.2)
+                for input, label in self.prepare_data(train_path, train_list):
                     _, acc_t, loss_t, t = sess.run([self.train_step, self.acc, self.loss, self.t],
                                                    {self.input: input, self.label: label,
                                                     self.is_training: True})
+                    train_num += len(input)
                     acc_total += acc_t
                     loss_total += loss_t
-                    print('step{} [{}/{}]  --acc:{}, --loss:{}'.format(i, end, len(train_file),
+                    print('step{} [{}/{}]  --acc:{}, --loss:{}'.format(train_step, train_num, len(train_list),
                                                                        round(acc_t, 2), round(loss_t, 4)))
-
-                acc_t = acc_total / num
-                loss_t = loss_total / num
+                    train_step += 1
+                acc_t = acc_total / train_step
+                loss_t = loss_total / train_step
                 acc_train.append(acc_t)
                 loss_train.append(loss_t)
 
                 # dev
-                if len(test_file) % config.BATCH_SIZE == 0:
-                    num = len(test_file) // config.BATCH_SIZE
-                else:
-                    num = len(test_file) // config.BATCH_SIZE + 1
-                begin = 0
-                for i in range(num):
-                    end = begin + config.BATCH_SIZE
-                    if end > len(test_file):
-                        end = len(test_file)
-                    data_list = test_file[begin:end]
-                    label = []
-                    input = []
-                    for d in data_list:
-                        plabel = self.id2label[d]
-                        plabel = to_categorical(plabel, 313)
-                        pinput = []
-                        file_path = os.path.join(train_path, d)
-                        for ff in file_path:
-                            pic_path = os.path.join(file_path, ff)
-                            im = Image.open(pic_path)
-                            im = im.convert("L")
-                            im = im.resize((config.WIDTH, config.HEIGHT))
-                            matrix = np.asarray(im)
-                            matrix = matrix / 255
-                            pinput.append(matrix)
-                        while len(pinput) < len(config.PIC_NUM):
-                            pinput.append(np.zeros(shape=(config.WIDTH, config.HEIGHT)))
-                        pinput = np.array(pinput)
-                        label.append(plabel)
-                        input.append(pinput)
-                    label = np.array(label)
-                    input = np.array(input)
+                dev_step = 0
+                for input, label in self.prepare_data(train_path, dev_list):
                     acc_d, loss_d = sess.run([self.acc, self.loss], {self.input: input, self.label: label,
                                                                      self.is_training: False})
+                    dev_step += 1
                     acc_dev_total += acc_d
                     loss_dev_total += loss_d
-                acc_dd = acc_dev_total / num
-                loss_dd = loss_dev_total / num
+                acc_dd = acc_dev_total / dev_step
+                loss_dd = loss_dev_total / dev_step
                 acc_dev.append(acc_dd)
                 loss_dev.append(loss_dd)
                 print('Epoch{}----acc:{},loss:{},val_acc:{},val_loss:{}'.format(step, acc_t, loss_t, round(acc_dd, 2),
@@ -246,46 +170,15 @@ class Model:
         with tf.Session() as sess:
             ckpt = tf.train.latest_checkpoint(self.MODEL_DIC)  # 找到存储变量值的位置
             saver.restore(sess, ckpt)
-            # test_input, test_label = self.prepare_data(test_path, self.id2label, self.label2lid)
-            # test_list = os.listdir(test_path)
-            file_list = os.listdir(test_path)
-            if len(file_list) % config.BATCH_SIZE == 0:
-                num = len(file_list) // config.BATCH_SIZE
-            else:
-                num = len(file_list) // config.BATCH_SIZE + 1
-            begin = 0
+            test_list = os.listdir(test_path)
             pre_list = []
-            for i in range(num):
-                end = begin + config.BATCH_SIZE
-                if end > len(file_list):
-                    end = len(file_list)
-                data_list = file_list[begin:end]
-                begin = end
-                input = []
-                for d in data_list:
-                    pinput = []
-                    file_path = os.path.join(test_path, d)
-                    for ff in os.listdir(file_path):
-                        pic_path = os.path.join(file_path, ff)
-                        im = Image.open(pic_path)
-                        im = im.convert("L")
-                        im = im.resize((config.WIDTH, config.HEIGHT))
-                        matrix = np.asarray(im)
-                        matrix = matrix / 255
-                        pinput.append(matrix)
-                    while len(pinput) < config.PIC_NUM:
-                        pinput.append(np.zeros(shape=(config.WIDTH, config.HEIGHT)))
-                    pinput = np.array(pinput)
-                    input.append(pinput)
-                input = np.array(input)
-
+            for input, label in self.prepare_test_data(test_path, test_list):
                 predict = sess.run(self.score, {self.input: input, self.is_training: False})
                 pre_list.append(predict)
             result = np.array(pre_list)
             return result
 
-    def prepare_data(self, path, id2label, label2lid):
-        file_list = os.listdir(path)
+    def prepare_data(self, path, file_list):
         if len(file_list) % config.BATCH_SIZE == 0:
             num = len(file_list) // config.BATCH_SIZE
         else:
@@ -300,8 +193,8 @@ class Model:
             label = []
             input = []
             for d in data_list:
-                plabel = id2label[d]
-                plabel = label2lid[plabel]
+                plabel = self.id2label[d]
+                plabel = self.label2lid[plabel]
                 plabel = to_categorical(plabel, 313)
                 pinput = []
                 file_path = os.path.join(path, d)
@@ -320,7 +213,38 @@ class Model:
                 input.append(pinput)
             label = np.array(label)
             input = np.array(input)
-        return input, label
+            yield input, label
+
+    def prepare_test_data(self, path, file_list):
+        if len(file_list) % config.BATCH_SIZE == 0:
+            num = len(file_list) // config.BATCH_SIZE
+        else:
+            num = len(file_list) // config.BATCH_SIZE + 1
+        begin = 0
+        for i in range(num):
+            end = begin + config.BATCH_SIZE
+            if end > len(file_list):
+                end = len(file_list)
+            data_list = file_list[begin:end]
+            begin = end
+            input = []
+            for d in data_list:
+                pinput = []
+                file_path = os.path.join(path, d)
+                for ff in os.listdir(file_path):
+                    pic_path = os.path.join(file_path, ff)
+                    im = Image.open(pic_path)
+                    im = im.convert("L")
+                    im = im.resize((config.WIDTH, config.HEIGHT))
+                    matrix = np.asarray(im)
+                    matrix = matrix / 255
+                    pinput.append(matrix)
+                while len(pinput) < config.PIC_NUM:
+                    pinput.append(np.zeros(shape=(config.WIDTH, config.HEIGHT)))
+                pinput = np.array(pinput)
+                input.append(pinput)
+            input = np.array(input)
+            yield input
 
     def load_table(self, table_path):
         with open(table_path, 'rb') as f:
