@@ -3,7 +3,11 @@ import config
 import matplotlib.pyplot as plt
 import numpy as np
 import math
+from keras.utils import to_categorical
 import os
+from PIL import Image
+from sklearn.model_selection import train_test_split
+import pickle
 np.set_printoptions(threshold=np.inf)
 # PIC_NUM = 24
 # WIDTH = 64
@@ -25,23 +29,24 @@ class Model:
         # batch, type_num
         self.label = tf.placeholder(shape=[None, None], dtype=tf.float32)
         self.is_training = tf.placeholder(dtype=tf.bool)
-        self.mode = 'train'
-        self.MODEL_PATH = '../result/model/Dense/dense'
-        self.MODEL_DIC = '../result/model/Dense'
+        self.MODEL_PATH = '../result/model/LipNet/model'
+        self.MODEL_DIC = '../result/model/LipNet'
         self.ACC_DIC = '../result/pic/LipNet'
         self.LOSS_DIC = '../result/pic/LipNet'
         self.PIC_DIC = '../result/pic/LipNet'
+        self.id2label = self.load_table('../data/id2label.pkl')
+        self.label2lid = self.load_table('../data/label2lid.pkl')
         self.score, self.acc, self.loss, self.train_step, self.t = self.create_graph()
 
     def create_graph(self):
         # CNN
         # shape (batch, depth, width, heigh, channel=1)
-        cnn_input = tf.reshape(self.input, shape=[-1, config.PIC_NUM, config.WIDTH, config.HEIGHT])
+        cnn_input = self.input
         print('cnn_input shape:', cnn_input.shape)
         cnn_input_ex = tf.expand_dims(cnn_input, axis=-1)
         print('cnn_input_ex shape:', cnn_input_ex.shape)
 
-        conv = tf.layers.conv3d(cnn_input_ex, config.FILTER_NUM1, kernel_size=(5, 7, 7), strides=(1, 2, 2),
+        conv = tf.layers.conv3d(cnn_input_ex, config.FILTER_NUM, kernel_size=(5, 7, 7), strides=(1, 2, 2),
                                 padding='SAME', activation=None, use_bias=False)
 
         conv_bn = tf.layers.batch_normalization(conv, training=self.is_training)
@@ -82,7 +87,7 @@ class Model:
 
         return score, acc, loss, train_step, t
 
-    def train(self, train_examples, dev_examples):
+    def train(self, train_path):
         saver = tf.train.Saver()
         with tf.Session() as sess:
             sess.run(tf.global_variables_initializer())
@@ -102,50 +107,94 @@ class Model:
                 loss_total = 0
                 acc_dev_total = 0
                 loss_dev_total = 0
-                if num%config.BATCH_SIZE == 0:
-                    num = len(train_examples) // config.BATCH_SIZE
+
+                file_list = os.listdir(train_path)
+                train_file, test_file = train_test_split(file_list, test_size=0.2)
+                if len(train_file) % config.BATCH_SIZE == 0:
+                    num = len(train_file)//config.BATCH_SIZE
                 else:
-                    num = len(train_examples) // config.BATCH_SIZE + 1
+                    num = len(train_file)//config.BATCH_SIZE+1
+                begin = 0
                 for i in range(num):
                     end = begin + config.BATCH_SIZE
-                    if end > len(train_examples):
-                        end = len(train_examples)
-                    train_batch = train_examples[begin:end]
-                    input_batch = [x.input for x in train_batch]
-                    label_batch = [x.label for x in train_batch]
+                    if end > len(train_file):
+                        end = len(train_file)
+                    data_list = train_file[begin:end]
                     begin = end
+                    label = []
+                    input = []
+                    for d in data_list:
+                        plabel = self.id2label[d]
+                        plabel = self.label2lid[plabel]
+                        plabel = to_categorical(plabel, 313)
+                        pinput = []
+                        file_path = os.path.join(train_path, d)
+                        for ff in os.listdir(file_path):
+                            pic_path = os.path.join(file_path, ff)
+                            im = Image.open(pic_path)
+                            im = im.convert("L")
+                            im = im.resize((config.WIDTH, config.HEIGHT))
+                            matrix = np.asarray(im)
+                            matrix = matrix / 255
+                            pinput.append(matrix)
+                        while len(pinput) < config.PIC_NUM:
+                            pinput.append(np.zeros(shape=(config.WIDTH, config.HEIGHT)))
+                        pinput = np.array(pinput)
+                        label.append(plabel)
+                        input.append(pinput)
+                    label = np.array(label)
+                    input = np.array(input)
                     _, acc_t, loss_t, t = sess.run([self.train_step, self.acc, self.loss, self.t],
-                                                   {self.input: input_batch, self.label: label_batch,
+                                                   {self.input: input, self.label: label,
                                                     self.is_training: True})
-
                     acc_total += acc_t
                     loss_total += loss_t
-                    print('step:{}  [{}/{}]  --acc:{}, --loss:{}'.format(i, end, len(train_examples), round(acc_t, 2),
-                                                                         round(loss_t, 4)))
+                    print('step{} [{}/{}]  --acc:{}, --loss:{}'.format(i, end, len(train_file),
+                                                                       round(acc_t, 2), round(loss_t, 4)))
 
                 acc_t = acc_total/num
                 loss_t = loss_total/num
                 acc_train.append(acc_t)
                 loss_train.append(loss_t)
 
-                begin = 0
-                if len(dev_examples) % 500 == 0:
-                    num = len(dev_examples)//500
+                # dev
+                if len(test_file) % config.BATCH_SIZE == 0:
+                    num = len(test_file)//config.BATCH_SIZE
                 else:
-                    num = len(dev_examples)//500+1
+                    num = len(test_file)//config.BATCH_SIZE+1
+                begin = 0
                 for i in range(num):
-                    end = begin + 500
-                    if end > len(dev_examples):
-                        end = len(dev_examples)
-                    dev_batch = dev_examples[begin:end]
-                    input_dev = [x.input for x in dev_batch]
-                    label_dev = [x.label for x in dev_batch]
-                    begin = end
-                    acc_d, loss_d = sess.run([self.acc, self.loss], {self.input: input_dev, self.label: label_dev,
+                    end = begin + config.BATCH_SIZE
+                    if end > len(test_file):
+                        end = len(test_file)
+                    data_list = test_file[begin:end]
+                    label = []
+                    input = []
+                    for d in data_list:
+                        plabel = self.id2label[d]
+                        plabel = self.label2lid[plabel]
+                        plabel = to_categorical(plabel, 313)
+                        pinput = []
+                        file_path = os.path.join(train_path, d)
+                        for ff in file_path:
+                            pic_path = os.path.join(file_path, ff)
+                            im = Image.open(pic_path)
+                            im = im.convert("L")
+                            im = im.resize((config.WIDTH, config.HEIGHT))
+                            matrix = np.asarray(im)
+                            matrix = matrix / 255
+                            pinput.append(matrix)
+                        while len(pinput) < len(config.PIC_NUM):
+                            pinput.append(np.zeros(shape=(config.WIDTH, config.HEIGHT)))
+                        pinput = np.array(pinput)
+                        label.append(plabel)
+                        input.append(pinput)
+                    label = np.array(label)
+                    input = np.array(input)
+                    acc_d, loss_d = sess.run([self.acc, self.loss], {self.input: input, self.label: label,
                                                                      self.is_training: False})
                     acc_dev_total += acc_d
                     loss_dev_total += loss_d
-
                 acc_dd = acc_dev_total/num
                 loss_dd = loss_dev_total/num
                 acc_dev.append(acc_dd)
@@ -189,29 +238,90 @@ class Model:
         plt.savefig(self.PIC_DIC, 'loss.png')
         plt.close()
 
-    def predict(self, test_examples):
+    def predict(self, test_path):
         saver = tf.train.Saver()
         with tf.Session() as sess:
             ckpt = tf.train.latest_checkpoint(self.MODEL_DIC)  # 找到存储变量值的位置
             saver.restore(sess, ckpt)
-            begin = 0
-            if len(test_examples)%500 == 0:
-                num = len(test_examples)//500
+            # test_input, test_label = self.prepare_data(test_path, self.id2label, self.label2lid)
+            # test_list = os.listdir(test_path)
+            file_list = os.listdir(test_path)
+            if len(file_list) % config.BATCH_SIZE == 0:
+                num = len(file_list) // config.BATCH_SIZE
             else:
-                num = len(test_examples)//500+1
+                num = len(file_list) // config.BATCH_SIZE + 1
+            begin = 0
             pre_list = []
-            for index in range(num):
-                end = begin + 500
-                if end > len(test_examples):
-                    end = len(test_examples)
-                test_batch = test_examples[begin:end]
-                input_test = [x.input for x in test_batch]
-                predict = sess.run(self.score, {self.input: input_test, self.is_training:False})
-                pre_list.append(predict)
+            for i in range(num):
+                end = begin + config.BATCH_SIZE
+                if end > len(file_list):
+                    end = len(file_list)
+                data_list = file_list[begin:end]
                 begin = end
-            result = np.concatenate(pre_list, axis=0)
+                input = []
+                for d in data_list:
+                    pinput = []
+                    file_path = os.path.join(test_path, d)
+                    for ff in os.listdir(file_path):
+                        pic_path = os.path.join(file_path, ff)
+                        im = Image.open(pic_path)
+                        im = im.convert("L")
+                        im = im.resize((config.WIDTH, config.HEIGHT))
+                        matrix = np.asarray(im)
+                        matrix = matrix / 255
+                        pinput.append(matrix)
+                    while len(pinput) < config.PIC_NUM:
+                        pinput.append(np.zeros(shape=(config.WIDTH, config.HEIGHT)))
+                    pinput = np.array(pinput)
+                    input.append(pinput)
+                input = np.array(input)
+
+                predict = sess.run(self.score, {self.input: input, self.is_training:False})
+                pre_list.append(predict)
+            result = np.array(pre_list)
             return result
 
 
-if __name__ == '__main__':
-     m = Model()
+    def prepare_data(self, path, id2label, label2lid):
+        file_list = os.listdir(path)
+        if len(file_list) % config.BATCH_SIZE == 0:
+            num = len(file_list) // config.BATCH_SIZE
+        else:
+            num = len(file_list) // config.BATCH_SIZE + 1
+        begin = 0
+        for i in range(num):
+            end = begin + config.BATCH_SIZE
+            if end > len(file_list):
+                end = len(file_list)
+            data_list = file_list[begin:end]
+            begin = end
+            label = []
+            input = []
+            for d in data_list:
+                plabel = id2label[d]
+                plabel = label2lid[plabel]
+                plabel = to_categorical(plabel, 313)
+                pinput = []
+                file_path = os.path.join(path, d)
+                for ff in os.listdir(file_path):
+                    pic_path = os.path.join(file_path, ff)
+                    im = Image.open(pic_path)
+                    im = im.convert("L")
+                    im = im.resize((config.WIDTH, config.HEIGHT))
+                    matrix = np.asarray(im)
+                    matrix = matrix / 255
+                    pinput.append(matrix)
+                while len(pinput) < config.PIC_NUM:
+                    pinput.append(np.zeros(shape=(config.WIDTH, config.HEIGHT)))
+                pinput = np.array(pinput)
+                label.append(plabel)
+                input.append(pinput)
+            label = np.array(label)
+            input = np.array(input)
+        return input, label
+
+
+    def load_table(self, table_path):
+        with open(table_path, 'rb') as f:
+            result = pickle.load(f)
+        return result
